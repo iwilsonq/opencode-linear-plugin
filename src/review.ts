@@ -111,7 +111,7 @@ async function ticketPullRequests(identifier: string, sources: ReviewSources) {
 }
 
 export async function copyForReview(
-	identifiers: string[],
+	identifiers: readonly string[],
 	sources: ReviewSources,
 ): Promise<ReviewCopyResult> {
 	const results = await Promise.allSettled(
@@ -144,10 +144,10 @@ export async function copyForReview(
 	return result;
 }
 
-export function identifierList(identifiers: string[]) {
+export function identifierList(identifiers: readonly string[]) {
 	return identifiers.join(", ");
 }
 
-export function statusQuestion(identifiers: string[]) {
+export function statusQuestion(identifiers: readonly string[]) {
 	return `What is the state of ${identifierList(identifiers)}? For each ticket: the Linear status, open PRs with review and CI status, and any blockers.`;
 }

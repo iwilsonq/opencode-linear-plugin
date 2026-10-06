@@ -1,34 +1,13 @@
 import { existsSync, readdirSync } from "node:fs";
 import { basename, join } from "node:path";
+import type { LinkedTicket, Ticket } from "./linear";
 
 export type LaunchMode = "implement" | "plan";
-
-export type TicketContext = {
-	identifier: string;
-	title: string;
-	url: string;
-	branchName: string;
-	description: string | null;
-	state: { name: string };
-	project: { name: string } | null;
-	attachments: { nodes: { title: string; url: string }[] };
-	relations: { nodes: { type: string; relatedIssue: LinkedIssue }[] };
-	inverseRelations: { nodes: { type: string; issue: LinkedIssue }[] };
-};
-
-type LinkedIssue = {
-	identifier: string;
-	title: string;
-	url: string;
-	branchName: string;
-	state: { type: string };
-	attachments: { nodes: { title: string; url: string }[] };
-};
 
 const CLOSED_STATE_TYPES = ["completed", "canceled"];
 
 export type LaunchInput = {
-	ticket: TicketContext;
+	ticket: Ticket;
 	mode: LaunchMode;
 	workspaceRoot: string;
 	repo: string | undefined;
@@ -50,18 +29,18 @@ export function listRepos(workspaceRoot: string) {
 		.toSorted((a, b) => basename(a).localeCompare(basename(b)));
 }
 
-function issueLine(issue: LinkedIssue) {
+function issueLine(issue: LinkedTicket) {
 	return `${issue.identifier} ${issue.title} (${issue.url})`;
 }
 
-function blockerLine(issue: LinkedIssue) {
+function blockerLine(issue: LinkedTicket) {
 	const links = issue.attachments.nodes.map(
 		(link) => `\n  - ${link.title} (${link.url})`,
 	);
 	return `${issueLine(issue)}, suggested branch ${issue.branchName}${links.join("")}`;
 }
 
-function ticketSection(ticket: TicketContext) {
+function ticketSection(ticket: Ticket) {
 	const blockedBy = ticket.inverseRelations.nodes
 		.filter((relation) => relation.type === "blocks")
 		.map((relation) => relation.issue)

@@ -2,9 +2,9 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { Ticket } from "./linear";
 import {
 	type LaunchInput,
-	type TicketContext,
 	buildLaunchPrompt,
 	expandHome,
 	listRepos,
@@ -28,13 +28,14 @@ const openBlocker = {
 	},
 };
 
-const ticket: TicketContext = {
+const ticket: Ticket = {
 	identifier: "ENG-123",
 	title: "Fix webhook retries",
 	url: "https://linear.app/acme/issue/ENG-123",
 	branchName: "sam/eng-123-fix-webhook-retries",
 	description: "Retries stop after one attempt.",
 	state: { name: "Todo" },
+	assignee: null,
 	project: { name: "Webhooks" },
 	attachments: {
 		nodes: [

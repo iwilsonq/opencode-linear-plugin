@@ -6,11 +6,11 @@ import { basename } from "node:path";
 import { promisify } from "node:util";
 import {
 	type LaunchMode,
-	type TicketContext,
 	buildLaunchPrompt,
 	expandHome,
 	listRepos,
 } from "./launch";
+import { type Linear, type TicketSummary, createLinear } from "./linear";
 import { extractUrls, unescapeBareUrls } from "./markdown";
 import {
 	type ReviewCopyResult,
@@ -22,159 +22,23 @@ import {
 	statusQuestion,
 } from "./review";
 import {
+	type TicketListAction,
+	type TicketListInput,
+	initialTicketListState,
+	updateTicketList,
+	viewTicketList,
+} from "./ticket-list";
+import {
 	For,
 	Show,
 	createEffect,
+	createMemo,
 	createResource,
 	createSignal,
 } from "solid-js";
 
 const PANEL = "linear.ticket";
 const PAGE = "tickets";
-
-const ISSUE_QUERY = `
-  query Issue($id: String!) {
-    issue(id: $id) {
-      identifier
-      title
-      url
-      branchName
-      description
-      state { name }
-      assignee { displayName }
-      project { name }
-      attachments { nodes { title url } }
-      relations { nodes { type relatedIssue { ...LinkedIssue } } }
-      inverseRelations { nodes { type issue { ...LinkedIssue } } }
-    }
-  }
-
-  fragment LinkedIssue on Issue {
-    identifier
-    title
-    url
-    branchName
-    state { type }
-    attachments { nodes { title url } }
-  }
-`;
-
-const ASSIGNED_ISSUES = `
-  query AssignedIssues {
-    viewer {
-      assignedIssues(
-        first: 50
-        orderBy: updatedAt
-        filter: {
-          state: {
-            type: { nin: ["completed", "canceled"] }
-            name: { neqIgnoreCase: "Duplicate" }
-          }
-        }
-      ) {
-        nodes {
-          identifier
-          title
-          url
-          state { name type position }
-          project { name }
-          cycle { number name startsAt }
-        }
-      }
-    }
-  }
-`;
-
-type Issue = TicketContext & {
-	assignee: { displayName: string } | null;
-};
-
-type IssueSummary = Pick<Issue, "identifier" | "title" | "url"> & {
-	state: { name: string; type: string; position: number };
-	project: { name: string } | null;
-	cycle: { number: number; name: string | null; startsAt: string } | null;
-};
-
-const STATE_TYPE_ORDER = ["started", "unstarted", "backlog", "triage"];
-
-function byWorkflowOrder(a: IssueSummary, b: IssueSummary) {
-	return (
-		STATE_TYPE_ORDER.indexOf(a.state.type) -
-			STATE_TYPE_ORDER.indexOf(b.state.type) ||
-		a.state.position - b.state.position
-	);
-}
-
-const GROUP_MODES = ["state", "project", "cycle"] as const;
-type GroupMode = (typeof GROUP_MODES)[number];
-
-type GroupKey = { label: string; sortKey: string };
-
-const NO_GROUP_SORT_KEY = "\uffff";
-
-const groupKey: Record<GroupMode, (issue: IssueSummary) => GroupKey> = {
-	state: (issue) => ({ label: issue.state.name, sortKey: "" }),
-	project: (issue) =>
-		issue.project
-			? { label: issue.project.name, sortKey: issue.project.name }
-			: { label: "No project", sortKey: NO_GROUP_SORT_KEY },
-	cycle: (issue) =>
-		issue.cycle
-			? {
-					label: issue.cycle.name ?? `Cycle ${issue.cycle.number}`,
-					sortKey: issue.cycle.startsAt,
-				}
-			: { label: "No cycle", sortKey: NO_GROUP_SORT_KEY },
-};
-
-function groupIssues(issues: IssueSummary[], mode: GroupMode) {
-	const groups = new Map<string, { key: GroupKey; issues: IssueSummary[] }>();
-	for (const issue of issues) {
-		const key = groupKey[mode](issue);
-		const group = groups.get(key.label) ?? { key, issues: [] };
-		group.issues.push(issue);
-		groups.set(key.label, group);
-	}
-	return [...groups.values()]
-		.toSorted((a, b) => a.key.sortKey.localeCompare(b.key.sortKey))
-		.map(({ key, issues }) => ({ label: key.label, issues }));
-}
-
-async function fetchIssue(apiKey: string, id: string): Promise<Issue> {
-	const response = await fetch("https://api.linear.app/graphql", {
-		method: "POST",
-		headers: { "Content-Type": "application/json", Authorization: apiKey },
-		body: JSON.stringify({ query: ISSUE_QUERY, variables: { id } }),
-	});
-	const json = (await response.json()) as {
-		data?: { issue: Issue | null };
-		errors?: { message: string }[];
-	};
-	if (json.errors?.length) throw new Error(json.errors[0].message);
-	if (!json.data?.issue) throw new Error(`Linear has no issue ${id}`);
-	return json.data.issue;
-}
-
-async function fetchAssignedIssues(apiKey: string): Promise<IssueSummary[]> {
-	const response = await fetch("https://api.linear.app/graphql", {
-		method: "POST",
-		headers: { "Content-Type": "application/json", Authorization: apiKey },
-		body: JSON.stringify({ query: ASSIGNED_ISSUES }),
-	});
-	const json = (await response.json()) as {
-		data?: { viewer: { assignedIssues: { nodes: IssueSummary[] } } };
-		errors?: { message: string }[];
-	};
-	if (json.errors?.length) throw new Error(json.errors[0].message);
-	return (json.data?.viewer.assignedIssues.nodes ?? []).toSorted(
-		byWorkflowOrder,
-	);
-}
-
-function ticketIdFromBranch(branch: string | undefined) {
-	const match = branch?.match(/([a-z]+-\d+)/i);
-	return match ? match[1].toUpperCase() : undefined;
-}
 
 type PluginContext = ReturnType<typeof usePlugin>;
 
@@ -203,15 +67,13 @@ function openUrl(url: string) {
 
 function TicketDetail(props: {
 	context: PluginContext;
-	apiKey: string;
+	linear: Linear;
 	identifier: string;
 	onPickLink: (urls: string[]) => void;
 }) {
 	const theme = () => props.context.theme;
 	const syntaxStyle = () => markdownStyle(props.context.theme);
-	const [issue] = createResource(() =>
-		fetchIssue(props.apiKey, props.identifier),
-	);
+	const [issue] = createResource(() => props.linear.ticket(props.identifier));
 	const urls = () => extractUrls(issue()?.description ?? "");
 
 	props.context.keymap.layer(() => ({
@@ -294,10 +156,10 @@ function TicketDetail(props: {
 
 const run = promisify(execFile);
 
-function reviewSources(apiKey: string): ReviewSources {
+function reviewSources(linear: Linear): ReviewSources {
 	return {
 		pullRequestLinks: async (identifier) =>
-			(await fetchIssue(apiKey, identifier)).attachments.nodes,
+			(await linear.ticket(identifier)).attachments.nodes,
 		pullRequestState: async (url) => {
 			const { stdout } = await run("gh", [
 				"pr",
@@ -373,13 +235,13 @@ async function findPlanAgent(context: PluginContext, directory: string) {
 
 async function launchTicketSession(
 	context: PluginContext,
-	apiKey: string,
+	linear: Linear,
 	identifier: string,
 	memory: RepoMemory,
 ) {
 	const workspaceRoot = resolveWorkspaceRoot(context);
 
-	const ticket = await fetchIssue(apiKey, identifier);
+	const ticket = await linear.ticket(identifier);
 	const remembered = ticket.project
 		? memory.repoFor(ticket.project.name)
 		: undefined;
@@ -460,8 +322,19 @@ async function launchTicketSession(
 	});
 }
 
+const NO_TICKETS: readonly TicketSummary[] = Object.freeze([]);
+
+function createTicketList(input: () => TicketListInput) {
+	const [state, setState] = createSignal(initialTicketListState);
+	const view = createMemo(() => viewTicketList(state(), input()));
+	const dispatch = (action: TicketListAction) => {
+		setState((current) => updateTicketList(current, input(), action));
+	};
+	return { view, dispatch };
+}
+
 function TicketList(props: {
-	apiKey: () => string;
+	linear: Linear;
 	memory: RepoMemory;
 	onClose: () => void;
 	onToggleFullscreen?: () => void;
@@ -472,77 +345,16 @@ function TicketList(props: {
 	const branch = () =>
 		context.data.location.vcs.info(location())?.branch.current;
 
-	const [issues, { refetch }] = createResource(
-		() => ({ key: props.apiKey() }),
-		async ({ key }) => {
-			if (!key)
-				throw new Error("No Linear API key. Run /linear again to set one.");
-			return fetchAssignedIssues(key);
-		},
+	const [tickets, { refetch }] = createResource(() =>
+		props.linear.openTickets(),
 	);
-
-	const [groupMode, setGroupMode] = createSignal<GroupMode>("state");
-	const cycleGroupMode = () =>
-		setGroupMode(
-			GROUP_MODES[(GROUP_MODES.indexOf(groupMode()) + 1) % GROUP_MODES.length],
-		);
-	const groups = () => groupIssues(issues() ?? [], groupMode());
-	const visibleIssues = () => groups().flatMap((group) => group.issues);
-
-	const [selectedId, setSelectedId] = createSignal<string>();
-	const selectedIndex = () => {
-		const id = selectedId() ?? ticketIdFromBranch(branch());
-		return Math.max(
-			0,
-			visibleIssues().findIndex((issue) => issue.identifier === id),
-		);
-	};
-	const selected = () => visibleIssues()[selectedIndex()];
-
-	const move = (delta: number) => {
-		const list = visibleIssues();
-		const index = Math.min(
-			list.length - 1,
-			Math.max(0, selectedIndex() + delta),
-		);
-		setSelectedId(list[index]?.identifier);
-	};
-
-	const [marked, setMarked] = createSignal<ReadonlySet<string>>(new Set());
-	const isMarked = (issue: IssueSummary) => marked().has(issue.identifier);
-	const setMarks = (issues: IssueSummary[], on: boolean) => {
-		const next = new Set(marked());
-		for (const issue of issues) {
-			if (on) next.add(issue.identifier);
-			else next.delete(issue.identifier);
-		}
-		setMarked(next);
-	};
-	const toggleMark = () => {
-		const issue = selected();
-		if (issue) setMarks([issue], !isMarked(issue));
-	};
-	const extendMark = (delta: number) => {
-		const from = selected();
-		move(delta);
-		const to = selected();
-		if (from && to) setMarks([from, to], true);
-	};
-	const toggleGroupMarks = () => {
-		const issue = selected();
-		const group = groups().find((group) => group.issues.includes(issue));
-		if (group) setMarks(group.issues, !group.issues.every(isMarked));
-	};
+	const list = createTicketList(() => ({
+		tickets: tickets() ?? NO_TICKETS,
+		branch: branch(),
+	}));
+	const selected = () => list.view().selected;
 
 	const [copying, setCopying] = createSignal(false);
-	const chosenIdentifiers = () => {
-		const markedIds = visibleIssues()
-			.filter(isMarked)
-			.map((issue) => issue.identifier);
-		if (markedIds.length > 0) return markedIds;
-		const issue = selected();
-		return issue ? [issue.identifier] : [];
-	};
 
 	const showError = (title: string) => (error: unknown) =>
 		context.ui.toast.show({
@@ -552,7 +364,7 @@ function TicketList(props: {
 		});
 
 	const copyIdentifiers = () => {
-		const identifiers = chosenIdentifiers();
+		const identifiers = list.view().chosen;
 		if (identifiers.length === 0) return;
 		const text = identifierList(identifiers);
 		writePlainClipboard(text)
@@ -561,7 +373,7 @@ function TicketList(props: {
 	};
 
 	const askAbout = async () => {
-		const identifiers = chosenIdentifiers();
+		const identifiers = list.view().chosen;
 		if (identifiers.length === 0) return;
 		const question = await context.ui.dialog.prompt({
 			title: `Ask about ${identifierList(identifiers)}`,
@@ -591,21 +403,17 @@ function TicketList(props: {
 	};
 
 	const copySelection = () => {
-		const identifiers = chosenIdentifiers();
+		const identifiers = list.view().chosen;
 		if (identifiers.length === 0 || copying()) return;
 		setCopying(true);
 		context.ui.toast.show({ message: "Finding open PRs…" });
-		copyForReview(identifiers, reviewSources(props.apiKey()))
+		copyForReview(identifiers, reviewSources(props.linear))
 			.then((result) => {
 				context.ui.toast.show(reviewCopyToast(result));
 				const done = result.copiedTickets.filter(
 					(identifier) => !result.failed.includes(identifier),
 				);
-				setMarked(
-					new Set(
-						[...marked()].filter((identifier) => !done.includes(identifier)),
-					),
-				);
+				list.dispatch({ type: "unmark", ids: done });
 			})
 			.catch((error) =>
 				context.ui.toast.show({
@@ -618,10 +426,10 @@ function TicketList(props: {
 	};
 
 	const idWidth = () =>
-		Math.max(0, ...(issues() ?? []).map((issue) => issue.identifier.length));
+		Math.max(0, ...(tickets() ?? []).map((ticket) => ticket.identifier.length));
 
 	let scroll: ScrollBoxRenderable | undefined;
-	const rowId = (issue: IssueSummary) => `linear-${issue.identifier}`;
+	const rowId = (ticket: TicketSummary) => `linear-${ticket.identifier}`;
 	createEffect(() => {
 		const issue = selected();
 		if (issue) scroll?.scrollChildIntoView(rowId(issue));
@@ -633,7 +441,7 @@ function TicketList(props: {
 	};
 
 	const [detailOpen, setDetailOpen] = createSignal(false);
-	const pickLink = async (issue: IssueSummary, urls: string[]) => {
+	const pickLink = async (issue: TicketSummary, urls: string[]) => {
 		const url = await context.ui.dialog.select({
 			title: `Links in ${issue.identifier}`,
 			placeholder: "Filter links",
@@ -650,7 +458,7 @@ function TicketList(props: {
 			() => (
 				<TicketDetail
 					context={context}
-					apiKey={props.apiKey()}
+					linear={props.linear}
 					identifier={issue.identifier}
 					onPickLink={(urls) => pickLink(issue, urls)}
 				/>
@@ -666,7 +474,7 @@ function TicketList(props: {
 		if (!issue || launching()) return;
 		setLaunching(true);
 		context.ui.toast.show({ message: `Loading ${issue.identifier}…` });
-		launchTicketSession(context, props.apiKey(), issue.identifier, props.memory)
+		launchTicketSession(context, props.linear, issue.identifier, props.memory)
 			.catch((error) =>
 				context.ui.toast.show({
 					title: `Could not start ${issue.identifier}`,
@@ -684,34 +492,32 @@ function TicketList(props: {
 				id: "linear.ticket.mark",
 				title: "Mark ticket",
 				bind: "space",
-				run: toggleMark,
+				run: () => list.dispatch({ type: "toggleMark" }),
 			},
 			{
 				id: "linear.ticket.mark.up",
 				title: "Mark and move up",
 				bind: "shift+up",
-				run: () => extendMark(-1),
+				run: () => list.dispatch({ type: "extendMark", delta: -1 }),
 			},
 			{
 				id: "linear.ticket.mark.down",
 				title: "Mark and move down",
 				bind: "shift+down",
-				run: () => extendMark(1),
+				run: () => list.dispatch({ type: "extendMark", delta: 1 }),
 			},
 			{
 				id: "linear.ticket.mark.group",
 				title: "Mark all tickets in the group",
 				bind: "a",
-				run: toggleGroupMarks,
+				run: () => list.dispatch({ type: "toggleGroupMarks" }),
 			},
 			{
 				id: "linear.ticket.mark.clear",
 				title: "Clear all marks",
 				bind: "x",
-				enabled: () => marked().size > 0,
-				run: () => {
-					setMarked(new Set<string>());
-				},
+				enabled: () => list.view().markedCount > 0,
+				run: () => list.dispatch({ type: "clearMarks" }),
 			},
 			{
 				id: "linear.ticket.copy",
@@ -749,19 +555,19 @@ function TicketList(props: {
 				id: "linear.ticket.up",
 				title: "Previous ticket",
 				bind: "up",
-				run: () => move(-1),
+				run: () => list.dispatch({ type: "move", delta: -1 }),
 			},
 			{
 				id: "linear.ticket.down",
 				title: "Next ticket",
 				bind: "down",
-				run: () => move(1),
+				run: () => list.dispatch({ type: "move", delta: 1 }),
 			},
 			{
 				id: "linear.ticket.group",
 				title: "Change grouping",
 				bind: "g",
-				run: cycleGroupMode,
+				run: () => list.dispatch({ type: "cycleGroupMode" }),
 			},
 			{
 				id: "linear.ticket.browser",
@@ -793,27 +599,27 @@ function TicketList(props: {
 
 	return (
 		<box style={{ flexDirection: "column", padding: 1, gap: 1, flexGrow: 1 }}>
-			<Show when={issues.loading}>
+			<Show when={tickets.loading}>
 				<text fg={context.theme.text.subdued}>Loading tickets…</text>
 			</Show>
-			<Show when={issues.error}>
+			<Show when={tickets.error}>
 				<text fg={context.theme.text.default}>
-					{String(issues.error?.message ?? issues.error)}
+					{String(tickets.error?.message ?? tickets.error)}
 				</text>
 			</Show>
-			<Show when={issues()?.length === 0}>
+			<Show when={tickets()?.length === 0}>
 				<text fg={context.theme.text.subdued}>No open tickets.</text>
 			</Show>
 			<scrollbox ref={scroll} style={{ flexGrow: 1 }}>
-				<For each={groups()}>
+				<For each={list.view().groups}>
 					{(group) => (
 						<box style={{ flexDirection: "column", marginBottom: 1 }}>
 							<text fg={context.theme.text.subdued}>
 								<b>
-									{group.label} ({group.issues.length})
+									{group.label} ({group.tickets.length})
 								</b>
 							</text>
-							<For each={group.issues}>
+							<For each={group.tickets}>
 								{(issue) => {
 									const isSelected = () => issue === selected();
 									const textColor = () =>
@@ -829,7 +635,9 @@ function TicketList(props: {
 													? context.theme.background.formfield.focused
 													: undefined
 											}
-											onMouseDown={() => setSelectedId(issue.identifier)}
+											onMouseDown={() =>
+												list.dispatch({ type: "select", id: issue.identifier })
+											}
 											onMouseUp={() => {
 												if (isSelected()) openDetail();
 											}}
@@ -838,7 +646,7 @@ function TicketList(props: {
 												fg={textColor()}
 												style={{ width: 1, flexShrink: 0 }}
 											>
-												{isMarked(issue) ? "●" : " "}
+												{list.view().isMarked(issue) ? "●" : " "}
 											</text>
 											<text
 												fg={textColor()}
@@ -854,7 +662,7 @@ function TicketList(props: {
 											>
 												{isSelected() ? <b>{issue.title}</b> : issue.title}
 											</text>
-											<Show when={groupMode() !== "state"}>
+											<Show when={list.view().groupMode !== "state"}>
 												<text
 													fg={
 														isSelected()
@@ -876,8 +684,10 @@ function TicketList(props: {
 			</scrollbox>
 			<text fg={context.theme.text.subdued}>
 				{[
-					`by ${groupMode()}`,
-					...(marked().size > 0 ? [`${marked().size} marked · [x] clear`] : []),
+					`by ${list.view().groupMode}`,
+					...(list.view().markedCount > 0
+						? [`${list.view().markedCount} marked · [x] clear`]
+						: []),
 					"[↑↓] select",
 					"[enter] details",
 					"[space] mark",
@@ -907,6 +717,8 @@ export default Plugin.define({
 			initial: { apiKey: "", repoByProject: {} as Record<string, string> },
 		});
 
+		const linear = createLinear({ apiKey: () => settings.apiKey });
+
 		const memory: RepoMemory = {
 			repoFor: (project) => settings.repoByProject?.[project],
 			remember: (project, repo) => {
@@ -934,7 +746,7 @@ export default Plugin.define({
 			render: (panel) => (
 				<Show when={panel.name === PANEL}>
 					<TicketList
-						apiKey={() => settings.apiKey}
+						linear={linear}
 						memory={memory}
 						onClose={panel.close}
 						onToggleFullscreen={panel.toggleFullscreen}
@@ -948,11 +760,7 @@ export default Plugin.define({
 		context.ui.router.register({
 			name: PAGE,
 			render: () => (
-				<TicketList
-					apiKey={() => settings.apiKey}
-					memory={memory}
-					onClose={goHome}
-				/>
+				<TicketList linear={linear} memory={memory} onClose={goHome} />
 			),
 		});
 
