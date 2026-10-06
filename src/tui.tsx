@@ -1,15 +1,26 @@
 import { Plugin, usePlugin } from "@opencode/plugin/tui";
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { type ScrollBoxRenderable, SyntaxStyle } from "@opentui/core";
 import { homedir } from "node:os";
 import { basename } from "node:path";
+import { promisify } from "node:util";
 import {
 	type LaunchMode,
 	type TicketContext,
 	buildLaunchPrompt,
+	expandHome,
 	listRepos,
 } from "./launch";
 import { extractUrls, unescapeBareUrls } from "./markdown";
+import {
+	type ReviewCopyResult,
+	type ReviewSources,
+	copyForReview,
+	identifierList,
+	parsePullRequestState,
+	richClipboardScript,
+	statusQuestion,
+} from "./review";
 import {
 	For,
 	Show,
@@ -281,6 +292,64 @@ function TicketDetail(props: {
 	);
 }
 
+const run = promisify(execFile);
+
+function reviewSources(apiKey: string): ReviewSources {
+	return {
+		pullRequestLinks: async (identifier) =>
+			(await fetchIssue(apiKey, identifier)).attachments.nodes,
+		pullRequestState: async (url) => {
+			const { stdout } = await run("gh", [
+				"pr",
+				"view",
+				url,
+				"--json",
+				"title,url,state,isDraft,additions,deletions",
+			]);
+			return parsePullRequestState(stdout);
+		},
+		writeClipboard: async (html, text) => {
+			await run("osascript", ["-e", richClipboardScript(html, text)]);
+		},
+	};
+}
+
+function reviewCopyToast(result: ReviewCopyResult) {
+	const parts = [
+		result.copied > 0
+			? `Copied ${result.copied} PR${result.copied === 1 ? "" : "s"} for review.`
+			: "Nothing copied.",
+	];
+	if (result.notReady.length > 0) {
+		parts.push(`No PRs ready for review: ${result.notReady.join(", ")}.`);
+	}
+	if (result.failed.length > 0) {
+		parts.push(`Could not check: ${result.failed.join(", ")}.`);
+	}
+	const variant: "success" | "warning" =
+		result.copied > 0 && result.failed.length === 0 ? "success" : "warning";
+	return { message: parts.join(" "), variant };
+}
+
+function resolveWorkspaceRoot(context: PluginContext) {
+	return expandHome(
+		(context.options.workspaceRoot as string | undefined) ?? "~/projects",
+		homedir(),
+	);
+}
+
+function writePlainClipboard(text: string) {
+	return new Promise<void>((resolve, reject) => {
+		const pbcopy = spawn("pbcopy");
+		pbcopy.on("error", reject);
+		pbcopy.stdin.on("error", reject);
+		pbcopy.on("close", (code) =>
+			code === 0 ? resolve() : reject(new Error(`pbcopy exited with ${code}`)),
+		);
+		pbcopy.stdin.end(text);
+	});
+}
+
 const WORKSPACE = "";
 
 type RepoMemory = {
@@ -308,9 +377,7 @@ async function launchTicketSession(
 	identifier: string,
 	memory: RepoMemory,
 ) {
-	const workspaceRoot = (
-		(context.options.workspaceRoot as string | undefined) ?? "~/projects"
-	).replace(/^~(?=$|\/)/, homedir());
+	const workspaceRoot = resolveWorkspaceRoot(context);
 
 	const ticket = await fetchIssue(apiKey, identifier);
 	const remembered = ticket.project
@@ -398,6 +465,7 @@ function TicketList(props: {
 	memory: RepoMemory;
 	onClose: () => void;
 	onToggleFullscreen?: () => void;
+	sessionID?: string;
 }) {
 	const context = usePlugin();
 	const location = () => context.location ?? context.data.location.default();
@@ -438,6 +506,115 @@ function TicketList(props: {
 			Math.max(0, selectedIndex() + delta),
 		);
 		setSelectedId(list[index]?.identifier);
+	};
+
+	const [marked, setMarked] = createSignal<ReadonlySet<string>>(new Set());
+	const isMarked = (issue: IssueSummary) => marked().has(issue.identifier);
+	const setMarks = (issues: IssueSummary[], on: boolean) => {
+		const next = new Set(marked());
+		for (const issue of issues) {
+			if (on) next.add(issue.identifier);
+			else next.delete(issue.identifier);
+		}
+		setMarked(next);
+	};
+	const toggleMark = () => {
+		const issue = selected();
+		if (issue) setMarks([issue], !isMarked(issue));
+	};
+	const extendMark = (delta: number) => {
+		const from = selected();
+		move(delta);
+		const to = selected();
+		if (from && to) setMarks([from, to], true);
+	};
+	const toggleGroupMarks = () => {
+		const issue = selected();
+		const group = groups().find((group) => group.issues.includes(issue));
+		if (group) setMarks(group.issues, !group.issues.every(isMarked));
+	};
+
+	const [copying, setCopying] = createSignal(false);
+	const chosenIdentifiers = () => {
+		const markedIds = visibleIssues()
+			.filter(isMarked)
+			.map((issue) => issue.identifier);
+		if (markedIds.length > 0) return markedIds;
+		const issue = selected();
+		return issue ? [issue.identifier] : [];
+	};
+
+	const showError = (title: string) => (error: unknown) =>
+		context.ui.toast.show({
+			title,
+			message: String((error as Error)?.message ?? error),
+			variant: "error",
+		});
+
+	const copyIdentifiers = () => {
+		const identifiers = chosenIdentifiers();
+		if (identifiers.length === 0) return;
+		const text = identifierList(identifiers);
+		writePlainClipboard(text)
+			.then(() => context.ui.toast.show({ message: `Copied ${text}` }))
+			.catch(showError("Could not copy ticket IDs"));
+	};
+
+	const askAbout = async () => {
+		const identifiers = chosenIdentifiers();
+		if (identifiers.length === 0) return;
+		const question = await context.ui.dialog.prompt({
+			title: `Ask about ${identifierList(identifiers)}`,
+			value: statusQuestion(identifiers),
+		});
+		if (!question?.trim()) return;
+		if (props.sessionID) {
+			await context.client.session.prompt({
+				sessionID: props.sessionID,
+				text: question,
+				delivery: "queue",
+			});
+			context.ui.toast.show({
+				message: `Asked about ${identifierList(identifiers)}`,
+			});
+			return;
+		}
+		const session = await context.client.session.create({
+			title: `Ask about ${identifierList(identifiers)}`,
+			location: { directory: resolveWorkspaceRoot(context) },
+		});
+		context.ui.router.navigate({ type: "session", sessionID: session.id });
+		await context.client.session.prompt({
+			sessionID: session.id,
+			text: question,
+		});
+	};
+
+	const copySelection = () => {
+		const identifiers = chosenIdentifiers();
+		if (identifiers.length === 0 || copying()) return;
+		setCopying(true);
+		context.ui.toast.show({ message: "Finding open PRs…" });
+		copyForReview(identifiers, reviewSources(props.apiKey()))
+			.then((result) => {
+				context.ui.toast.show(reviewCopyToast(result));
+				const done = result.copiedTickets.filter(
+					(identifier) => !result.failed.includes(identifier),
+				);
+				setMarked(
+					new Set(
+						[...marked()].filter((identifier) => !done.includes(identifier)),
+					),
+				);
+			})
+			.catch((error) =>
+				context.ui.toast.show({
+					title: "Could not copy PRs",
+					message: String(error?.message ?? error),
+					variant: "error",
+				}),
+			)
+			.finally(() => setCopying(false));
 	};
 
 	const idWidth = () =>
@@ -503,6 +680,59 @@ function TicketList(props: {
 	context.keymap.layer(() => ({
 		enabled: () => !detailOpen(),
 		commands: [
+			{
+				id: "linear.ticket.mark",
+				title: "Mark ticket",
+				bind: "space",
+				run: toggleMark,
+			},
+			{
+				id: "linear.ticket.mark.up",
+				title: "Mark and move up",
+				bind: "shift+up",
+				run: () => extendMark(-1),
+			},
+			{
+				id: "linear.ticket.mark.down",
+				title: "Mark and move down",
+				bind: "shift+down",
+				run: () => extendMark(1),
+			},
+			{
+				id: "linear.ticket.mark.group",
+				title: "Mark all tickets in the group",
+				bind: "a",
+				run: toggleGroupMarks,
+			},
+			{
+				id: "linear.ticket.mark.clear",
+				title: "Clear all marks",
+				bind: "x",
+				enabled: () => marked().size > 0,
+				run: () => {
+					setMarked(new Set<string>());
+				},
+			},
+			{
+				id: "linear.ticket.copy",
+				title: "Copy open PRs for review",
+				bind: "y",
+				run: copySelection,
+			},
+			{
+				id: "linear.ticket.copy.ids",
+				title: "Copy ticket IDs",
+				bind: "c",
+				run: copyIdentifiers,
+			},
+			{
+				id: "linear.ticket.ask",
+				title: "Ask the agent about the tickets",
+				bind: "?",
+				run: () => {
+					askAbout().catch(showError("Could not ask about the tickets"));
+				},
+			},
 			{
 				id: "linear.ticket.work",
 				title: "Start a session for this ticket",
@@ -606,6 +836,12 @@ function TicketList(props: {
 										>
 											<text
 												fg={textColor()}
+												style={{ width: 1, flexShrink: 0 }}
+											>
+												{isMarked(issue) ? "●" : " "}
+											</text>
+											<text
+												fg={textColor()}
 												style={{ width: idWidth(), flexShrink: 0 }}
 											>
 												<b>{issue.identifier}</b>
@@ -641,8 +877,14 @@ function TicketList(props: {
 			<text fg={context.theme.text.subdued}>
 				{[
 					`by ${groupMode()}`,
+					...(marked().size > 0 ? [`${marked().size} marked · [x] clear`] : []),
 					"[↑↓] select",
 					"[enter] details",
+					"[space] mark",
+					"[a] mark group",
+					"[y] copy PRs",
+					"[c] copy IDs",
+					"[?] ask",
 					"[w] work",
 					"[g] group",
 					"[o] browser",
@@ -696,6 +938,7 @@ export default Plugin.define({
 						memory={memory}
 						onClose={panel.close}
 						onToggleFullscreen={panel.toggleFullscreen}
+						sessionID={panel.sessionID}
 					/>
 				</Show>
 			),

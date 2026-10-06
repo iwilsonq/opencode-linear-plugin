@@ -15,15 +15,100 @@ useful, and can it start agent sessions from a ticket?
 - Prompts for a Linear personal API key on first run and stores it in plugin
   storage.
 
-## Load it
+## Install
 
-Run `bun install`, then add the package path to `~/.config/opencode/cli.json`:
+### Requirements
 
-```json
-{
-  "plugins": ["/path/to/opencode-linear-plugin"]
-}
-```
+- OpenCode v2 (the `opencode2` CLI). The plugin is pinned to v2.0.1.
+- [Bun](https://bun.sh).
+- macOS. Links open with `open`, and copying uses `pbcopy` and `osascript`.
+- A Linear personal API key. Create one in Linear under Settings → Security
+  & access → Personal API keys.
+- Optional: the GitHub CLI (`gh`), logged in. Only `y` (copy PRs) needs it.
+
+### Steps
+
+1. Clone the repo and install the dependencies:
+
+   ```sh
+   git clone https://github.com/iwilsonq/opencode-linear-plugin.git
+   cd opencode-linear-plugin
+   bun install
+   ```
+
+2. Check your OpenCode version:
+
+   ```sh
+   opencode2 --version
+   ```
+
+   If it is not v2.0.1, pin the plugin packages to your version. A version
+   mismatch crashes the panel. For example, for v2.0.5:
+
+   ```sh
+   bun add @opencode/plugin@2.0.5
+   bun add -d @opencode/theme@2.0.5
+   ```
+
+3. Add the plugin to `~/.config/opencode/cli.json`. Use the absolute path to
+   the clone:
+
+   ```json
+   {
+     "plugins": ["/path/to/opencode-linear-plugin"]
+   }
+   ```
+
+   To set options, use an object entry instead:
+
+   ```json
+   {
+     "plugins": [
+       {
+         "package": "/path/to/opencode-linear-plugin",
+         "options": { "workspaceRoot": "~/code" }
+       }
+     ]
+   }
+   ```
+
+   | Option | Default | Use |
+   |---|---|---|
+   | `workspaceRoot` | `~/projects` | The folder that contains your repos. `w` lists the repos in it, and the agent searches it for the repos a ticket touches. |
+
+4. Check that OpenCode finds the plugin:
+
+   ```sh
+   opencode2 plugin list
+   ```
+
+   The list shows the plugin path with the version `local`.
+
+5. Start `opencode2` (restart it if it is already running) and run
+   `/linear`. Paste your Linear API key when it asks. The plugin stores the
+   key in OpenCode's plugin storage, and does not ask again.
+
+### Update
+
+Run `git pull` and `bun install` in the clone, then restart `opencode2`.
+
+### Remove
+
+Delete the plugin entry from `~/.config/opencode/cli.json`, then restart
+`opencode2`.
+
+### Troubleshooting
+
+- **`/linear` does not appear:** run `opencode2 plugin list`. If the plugin
+  is missing, check the path in `cli.json`. OpenCode loads local plugins from
+  `tui.ts` in the package root.
+- **The panel crashes with an error about `context.theme`:** the plugin
+  packages do not match your OpenCode version. Repeat step 2.
+- **A Linear error shows in the list:** check that the API key is valid and
+  has not been revoked. The plugin has no command to change a stored key
+  yet.
+- **`y` says it could not check a ticket:** run `gh auth status` to check that
+  the GitHub CLI is logged in and can read the repo.
 
 ## Use it
 
@@ -43,7 +128,16 @@ Run `bun install`, then add the package path to `~/.config/opencode/cli.json`:
    or the blocking ticket's PR branch. The branch name comes from Linear, so
    it follows your Linear Git settings. The workspace root is `~/projects`;
    set the `workspaceRoot` plugin option to change it.
-5. In the details dialog: `l` lists the links in the description and opens
+5. To share PRs for review: `space` marks a ticket, `shift+↑`/`shift+↓`
+   marks while moving, `a` marks or unmarks the whole group, and `x` clears
+   all marks. `y` copies
+   the open, non-draft PRs linked to the marked tickets (or the selected
+   ticket) as a rich-text list of PR titles linked to their URLs, with line
+   counts (`(+140 -27)`), ready to paste into Slack. It needs the GitHub CLI (`gh`) logged in, and macOS.
+   `c` copies the ticket IDs (`ENG-1, ENG-4`). `?` asks the agent about the
+   tickets: edit the suggested question, then it goes to the current session
+   (queued if the agent is busy), or to a new session from the home page.
+6. In the details dialog: `l` lists the links in the description and opens
    the one you pick, `o` opens the ticket, `esc` closes.
 
 Run `bun test` for the tests.

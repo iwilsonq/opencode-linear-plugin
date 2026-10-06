@@ -35,6 +35,10 @@ export type LaunchInput = {
 	note: string;
 };
 
+export function expandHome(path: string, home: string) {
+	return path.replace(/^~(?=$|\/)/, home);
+}
+
 export function listRepos(workspaceRoot: string) {
 	return readdirSync(workspaceRoot, { withFileTypes: true })
 		.filter(

@@ -6,6 +6,7 @@ import {
 	type LaunchInput,
 	type TicketContext,
 	buildLaunchPrompt,
+	expandHome,
 	listRepos,
 } from "./launch";
 
@@ -158,6 +159,15 @@ describe("buildLaunchPrompt", () => {
 		expect(
 			buildLaunchPrompt({ ...input, note: "  only the API part " }),
 		).toContain("## Note from me\nonly the API part");
+	});
+});
+
+describe("expandHome", () => {
+	test("expands a leading ~ only", () => {
+		expect(expandHome("~/projects", "/home/sam")).toBe("/home/sam/projects");
+		expect(expandHome("~", "/home/sam")).toBe("/home/sam");
+		expect(expandHome("~other/x", "/home/sam")).toBe("~other/x");
+		expect(expandHome("/work/~/x", "/home/sam")).toBe("/work/~/x");
 	});
 });
 
