@@ -7,7 +7,6 @@ export type PullRequest = {
 
 export type PullRequestState = PullRequest & {
 	state: string;
-	isDraft: boolean;
 };
 
 const PULL_REQUEST_URL = /^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/\d+$/;
@@ -20,9 +19,9 @@ export function pullRequestUrls(links: { url: string }[]) {
 	];
 }
 
-export function readyForReview(pulls: PullRequestState[]): PullRequest[] {
+export function openPullRequests(pulls: PullRequestState[]): PullRequest[] {
 	return pulls
-		.filter((pull) => pull.state === "OPEN" && !pull.isDraft)
+		.filter((pull) => pull.state === "OPEN")
 		.map(({ title, url, additions, deletions }) => ({
 			title,
 			url,
@@ -71,7 +70,6 @@ export function parsePullRequestState(json: string): PullRequestState {
 		typeof value?.title !== "string" ||
 		typeof value?.url !== "string" ||
 		typeof value?.state !== "string" ||
-		typeof value?.isDraft !== "boolean" ||
 		!Number.isInteger(value?.additions) ||
 		!Number.isInteger(value?.deletions)
 	) {
@@ -89,7 +87,7 @@ export type ReviewSources = {
 export type ReviewCopyResult = {
 	copied: number;
 	copiedTickets: string[];
-	notReady: string[];
+	noOpenPulls: string[];
 	failed: string[];
 };
 
@@ -105,7 +103,7 @@ async function ticketPullRequests(identifier: string, sources: ReviewSources) {
 		pullRequestUrls(links).map(sources.pullRequestState),
 	);
 	return {
-		pulls: readyForReview(settledValues(states)),
+		pulls: openPullRequests(settledValues(states)),
 		failedPulls: states.some((state) => state.status === "rejected"),
 	};
 }
@@ -121,7 +119,7 @@ export async function copyForReview(
 	const result: ReviewCopyResult = {
 		copied: 0,
 		copiedTickets: [],
-		notReady: [],
+		noOpenPulls: [],
 		failed: [],
 	};
 	results.forEach((ticket, index) => {
@@ -131,7 +129,7 @@ export async function copyForReview(
 		}
 		if (ticket.status === "rejected") return;
 		if (ticket.value.pulls.length === 0) {
-			if (!ticket.value.failedPulls) result.notReady.push(identifier);
+			if (!ticket.value.failedPulls) result.noOpenPulls.push(identifier);
 			return;
 		}
 		pulls.push(...ticket.value.pulls);

@@ -6,7 +6,7 @@ import {
 	identifierList,
 	parsePullRequestState,
 	pullRequestUrls,
-	readyForReview,
+	openPullRequests,
 	reviewListHtml,
 	reviewListText,
 	richClipboardScript,
@@ -40,23 +40,17 @@ describe("pullRequestUrls", () => {
 	});
 });
 
-describe("readyForReview", () => {
-	test("keeps open pull requests that are not drafts", () => {
-		const pull = (state: string, isDraft: boolean, number: number) => ({
+describe("openPullRequests", () => {
+	test("keeps open pull requests, drafts included", () => {
+		const pull = (state: string, number: number) => ({
 			title: `PR ${number}`,
 			url: `https://github.com/acme/web/pull/${number}`,
 			state,
-			isDraft,
 			additions: number * 10,
 			deletions: number,
 		});
 		expect(
-			readyForReview([
-				pull("OPEN", false, 1),
-				pull("OPEN", true, 2),
-				pull("MERGED", false, 3),
-				pull("CLOSED", false, 4),
-			]),
+			openPullRequests([pull("OPEN", 1), pull("MERGED", 2), pull("CLOSED", 3)]),
 		).toEqual([
 			{
 				title: "PR 1",
@@ -113,7 +107,7 @@ describe("richClipboardScript", () => {
 describe("parsePullRequestState", () => {
 	test("returns gh output with the expected fields", () => {
 		const json =
-			'{"title":"T","url":"https://github.com/a/b/pull/1","state":"OPEN","isDraft":false,"additions":5,"deletions":2}';
+			'{"title":"T","url":"https://github.com/a/b/pull/1","state":"OPEN","additions":5,"deletions":2}';
 		expect(parsePullRequestState(json).title).toBe("T");
 	});
 
@@ -138,28 +132,24 @@ describe("copyForReview", () => {
 			additions: 1,
 			deletions: 1,
 			state: "OPEN",
-			isDraft: false,
 		},
 		[pr("web", 2)]: {
-			title: "Draft",
+			title: "Open draft",
 			additions: 1,
 			deletions: 1,
 			state: "OPEN",
-			isDraft: true,
 		},
 		[pr("api", 3)]: {
 			title: "Merged",
 			additions: 1,
 			deletions: 1,
 			state: "MERGED",
-			isDraft: false,
 		},
 		[pr("api", 4)]: {
 			title: "Open two",
 			additions: 1,
 			deletions: 1,
 			state: "OPEN",
-			isDraft: false,
 		},
 	};
 	const links: Record<string, string[]> = {
@@ -186,16 +176,18 @@ describe("copyForReview", () => {
 		};
 	}
 
-	test("copies ready PRs and reports tickets without them", async () => {
+	test("copies open PRs and reports tickets without them", async () => {
 		const clipboard: { html?: string; text?: string } = {};
 		const result = await copyForReview(["ENG-1", "ENG-2"], sources(clipboard));
 		expect(result).toEqual({
-			copied: 1,
+			copied: 2,
 			copiedTickets: ["ENG-1"],
-			notReady: ["ENG-2"],
+			noOpenPulls: ["ENG-2"],
 			failed: [],
 		});
-		expect(clipboard.text).toBe(`• Open one (+1 -1) ${pr("web", 1)}`);
+		expect(clipboard.text).toBe(
+			`• Open one (+1 -1) ${pr("web", 1)}\n• Open draft (+1 -1) ${pr("web", 2)}`,
+		);
 	});
 
 	test("copies what it can when a ticket or a PR check fails", async () => {
@@ -205,17 +197,17 @@ describe("copyForReview", () => {
 			sources(clipboard),
 		);
 		expect(result).toEqual({
-			copied: 2,
+			copied: 3,
 			copiedTickets: ["ENG-1", "ENG-3"],
-			notReady: [],
+			noOpenPulls: [],
 			failed: ["ENG-3", "ENG-404"],
 		});
 		expect(clipboard.text).toBe(
-			`• Open one (+1 -1) ${pr("web", 1)}\n• Open two (+1 -1) ${pr("api", 4)}`,
+			`• Open one (+1 -1) ${pr("web", 1)}\n• Open draft (+1 -1) ${pr("web", 2)}\n• Open two (+1 -1) ${pr("api", 4)}`,
 		);
 	});
 
-	test("does not touch the clipboard when nothing is ready", async () => {
+	test("does not touch the clipboard when no PR is open", async () => {
 		const clipboard: { html?: string; text?: string } = {};
 		const result = await copyForReview(["ENG-2"], sources(clipboard));
 		expect(result.copied).toBe(0);

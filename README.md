@@ -131,7 +131,7 @@ Delete the plugin entry from `~/.config/opencode/cli.json`, then restart
 5. To share PRs for review: `space` marks a ticket, `shift+↑`/`shift+↓`
    marks while moving, `a` marks or unmarks the whole group, and `x` clears
    all marks. `y` copies
-   the open, non-draft PRs linked to the marked tickets (or the selected
+   the open PRs, drafts included, linked to the marked tickets (or the selected
    ticket) as a rich-text list of PR titles linked to their URLs, with line
    counts (`(+140 -27)`), ready to paste into Slack. It needs the GitHub CLI (`gh`) logged in, and macOS.
    `c` copies the ticket IDs (`ENG-1, ENG-4`). `?` asks the agent about the

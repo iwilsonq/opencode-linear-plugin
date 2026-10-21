@@ -166,7 +166,7 @@ function reviewSources(linear: Linear): ReviewSources {
 				"view",
 				url,
 				"--json",
-				"title,url,state,isDraft,additions,deletions",
+				"title,url,state,additions,deletions",
 			]);
 			return parsePullRequestState(stdout);
 		},
@@ -182,8 +182,8 @@ function reviewCopyToast(result: ReviewCopyResult) {
 			? `Copied ${result.copied} PR${result.copied === 1 ? "" : "s"} for review.`
 			: "Nothing copied.",
 	];
-	if (result.notReady.length > 0) {
-		parts.push(`No PRs ready for review: ${result.notReady.join(", ")}.`);
+	if (result.noOpenPulls.length > 0) {
+		parts.push(`No open PRs: ${result.noOpenPulls.join(", ")}.`);
 	}
 	if (result.failed.length > 0) {
 		parts.push(`Could not check: ${result.failed.join(", ")}.`);
