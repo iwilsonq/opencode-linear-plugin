@@ -45,7 +45,7 @@ type PluginContext = ReturnType<typeof usePlugin>;
 function markdownStyle(theme: PluginContext["theme"]) {
 	const markdown = theme.markdown;
 	return SyntaxStyle.fromStyles({
-		default: { fg: theme.text.default },
+		default: { fg: theme.text.base },
 		"markup.heading": { fg: markdown.heading, bold: true },
 		"markup.heading.1": { fg: markdown.heading, bold: true, underline: true },
 		"markup.strong": { fg: markdown.strong, bold: true },
@@ -56,7 +56,7 @@ function markdownStyle(theme: PluginContext["theme"]) {
 		"markup.link": { fg: markdown.link, underline: true },
 		"markup.link.url": { fg: markdown.link, underline: true },
 		"markup.link.label": { fg: markdown.linkText, underline: true },
-		"markup.strikethrough": { fg: theme.text.subdued },
+		"markup.strikethrough": { fg: theme.text.muted },
 	});
 }
 
@@ -108,22 +108,22 @@ function TicketDetail(props: {
 			}}
 		>
 			<Show when={issue.loading}>
-				<text fg={theme().text.subdued}>Loading {props.identifier}…</text>
+				<text fg={theme().text.muted}>Loading {props.identifier}…</text>
 			</Show>
 			<Show when={issue.error}>
-				<text fg={theme().text.default}>
+				<text fg={theme().text.base}>
 					{String(issue.error?.message ?? issue.error)}
 				</text>
 			</Show>
 			<Show when={issue()}>
 				{(data) => (
 					<>
-						<text fg={theme().text.default}>
+						<text fg={theme().text.base}>
 							<b>
 								{data().identifier} {data().title}
 							</b>
 						</text>
-						<text fg={theme().text.subdued}>
+						<text fg={theme().text.muted}>
 							{data().state.name} ·{" "}
 							{data().assignee?.displayName ?? "Unassigned"}
 						</text>
@@ -135,14 +135,14 @@ function TicketDetail(props: {
 										: "_No description._"
 								}
 								syntaxStyle={syntaxStyle()}
-								fg={theme().text.default}
+								fg={theme().text.base}
 								conceal
 							/>
 						</scrollbox>
 					</>
 				)}
 			</Show>
-			<text fg={theme().text.subdued}>
+			<text fg={theme().text.muted}>
 				{[
 					"[↑↓] scroll",
 					"[o] browser",
@@ -210,6 +210,16 @@ function writePlainClipboard(text: string) {
 		);
 		pbcopy.stdin.end(text);
 	});
+}
+
+function selectedModel(context: PluginContext) {
+	const model = context.ui.model.current();
+	if (!model) return undefined;
+	return {
+		id: model.modelID,
+		providerID: model.providerID,
+		variant: model.variant,
+	};
 }
 
 const WORKSPACE = "";
@@ -304,6 +314,7 @@ async function launchTicketSession(
 	const session = await context.client.session.create({
 		title: `${ticket.identifier} ${ticket.title}`,
 		agent: planAgent?.id,
+		model: selectedModel(context),
 		location: { directory },
 	});
 	if (ticket.project && repo !== WORKSPACE) {
@@ -393,6 +404,7 @@ function TicketList(props: {
 		}
 		const session = await context.client.session.create({
 			title: `Ask about ${identifierList(identifiers)}`,
+			model: selectedModel(context),
 			location: { directory: resolveWorkspaceRoot(context) },
 		});
 		context.ui.router.navigate({ type: "session", sessionID: session.id });
@@ -600,21 +612,21 @@ function TicketList(props: {
 	return (
 		<box style={{ flexDirection: "column", padding: 1, gap: 1, flexGrow: 1 }}>
 			<Show when={tickets.loading}>
-				<text fg={context.theme.text.subdued}>Loading tickets…</text>
+				<text fg={context.theme.text.muted}>Loading tickets…</text>
 			</Show>
 			<Show when={tickets.error}>
-				<text fg={context.theme.text.default}>
+				<text fg={context.theme.text.base}>
 					{String(tickets.error?.message ?? tickets.error)}
 				</text>
 			</Show>
 			<Show when={tickets()?.length === 0}>
-				<text fg={context.theme.text.subdued}>No open tickets.</text>
+				<text fg={context.theme.text.muted}>No open tickets.</text>
 			</Show>
 			<scrollbox ref={scroll} style={{ flexGrow: 1 }}>
 				<For each={list.view().groups}>
 					{(group) => (
 						<box style={{ flexDirection: "column", marginBottom: 1 }}>
-							<text fg={context.theme.text.subdued}>
+							<text fg={context.theme.text.muted}>
 								<b>
 									{group.label} ({group.tickets.length})
 								</b>
@@ -625,7 +637,7 @@ function TicketList(props: {
 									const textColor = () =>
 										isSelected()
 											? context.theme.text.formfield.focused
-											: context.theme.text.default;
+											: context.theme.text.base;
 									return (
 										<box
 											id={rowId(issue)}
@@ -667,7 +679,7 @@ function TicketList(props: {
 													fg={
 														isSelected()
 															? textColor()
-															: context.theme.text.subdued
+															: context.theme.text.muted
 													}
 													style={{ flexShrink: 0 }}
 												>
@@ -682,7 +694,7 @@ function TicketList(props: {
 					)}
 				</For>
 			</scrollbox>
-			<text fg={context.theme.text.subdued}>
+			<text fg={context.theme.text.muted}>
 				{[
 					`by ${list.view().groupMode}`,
 					...(list.view().markedCount > 0

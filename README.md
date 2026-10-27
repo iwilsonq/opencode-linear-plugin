@@ -19,7 +19,7 @@ useful, and can it start agent sessions from a ticket?
 
 ### Requirements
 
-- OpenCode v2 (the `opencode2` CLI). The plugin is pinned to v2.0.1.
+- OpenCode v2 (the `opencode2` CLI). The plugin is pinned to v2.0.27.
 - [Bun](https://bun.sh).
 - macOS. Links open with `open`, and copying uses `pbcopy` and `osascript`.
 - A Linear personal API key. Create one in Linear under Settings → Security
@@ -42,7 +42,7 @@ useful, and can it start agent sessions from a ticket?
    opencode2 --version
    ```
 
-   If it is not v2.0.1, pin the plugin packages to your version. A version
+   If it is not v2.0.27, pin the plugin packages to your version. A version
    mismatch crashes the panel. For example, for v2.0.5:
 
    ```sh
