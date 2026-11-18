@@ -85,6 +85,36 @@ describe("grouping", () => {
 	});
 });
 
+describe("ticket order", () => {
+	test("sorts tickets in each group by ticket number in every group mode", () => {
+		const unsorted = {
+			tickets: [
+				ticket("ENG-10", "Todo", "Web", 1),
+				ticket("ENG-9", "In Progress", "Web", 1),
+				ticket("ENG-2", "Todo", "Web", 1),
+				ticket("ENG-100", "In Progress", "Web", 1),
+			],
+		};
+		const labelsAndIds = (state: TicketListState) =>
+			view(state, unsorted).groups.map((group) => [
+				group.label,
+				group.tickets.map((ticket) => ticket.identifier),
+			]);
+
+		expect(labelsAndIds(initialTicketListState)).toEqual([
+			["Todo", ["ENG-2", "ENG-10"]],
+			["In Progress", ["ENG-9", "ENG-100"]],
+		]);
+		const byProject = run([{ type: "cycleGroupMode" }]);
+		expect(labelsAndIds(byProject)).toEqual([
+			["Web", ["ENG-2", "ENG-9", "ENG-10", "ENG-100"]],
+		]);
+		expect(labelsAndIds(run([{ type: "cycleGroupMode" }], byProject))).toEqual([
+			["Cycle 1", ["ENG-2", "ENG-9", "ENG-10", "ENG-100"]],
+		]);
+	});
+});
+
 describe("rendering stability", () => {
 	test("keeps the same group objects until the tickets or group mode change", () => {
 		const before = view(initialTicketListState).groups;

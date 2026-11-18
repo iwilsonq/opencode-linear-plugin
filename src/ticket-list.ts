@@ -90,7 +90,14 @@ function buildGroups(
 	}
 	return [...groups.values()]
 		.toSorted((a, b) => a.key.sortKey.localeCompare(b.key.sortKey))
-		.map(({ key, tickets }) => ({ label: key.label, tickets }));
+		.map(({ key, tickets }) => ({
+			label: key.label,
+			tickets: tickets.toSorted(byTicketNumber),
+		}));
+}
+
+function byTicketNumber(a: TicketSummary, b: TicketSummary) {
+	return a.identifier.localeCompare(b.identifier, "en", { numeric: true });
 }
 
 export function ticketIdFromBranch(branch: string | undefined) {
