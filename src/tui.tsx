@@ -35,6 +35,7 @@ import {
 	createMemo,
 	createResource,
 	createSignal,
+	onCleanup,
 } from "solid-js";
 
 const PANEL = "linear.ticket";
@@ -42,22 +43,26 @@ const PAGE = "tickets";
 
 type PluginContext = ReturnType<typeof usePlugin>;
 
-function markdownStyle(theme: PluginContext["theme"]) {
+function markdownStyle(context: PluginContext) {
+	const theme = context.theme;
 	const markdown = theme.markdown;
-	return SyntaxStyle.fromStyles({
-		default: { fg: theme.text.base },
-		"markup.heading": { fg: markdown.heading, bold: true },
-		"markup.heading.1": { fg: markdown.heading, bold: true, underline: true },
-		"markup.strong": { fg: markdown.strong, bold: true },
-		"markup.italic": { fg: markdown.emphasis, italic: true },
-		"markup.list": { fg: markdown.listItem },
-		"markup.quote": { fg: markdown.blockQuote, italic: true },
-		"markup.raw": { fg: markdown.code },
-		"markup.link": { fg: markdown.link, underline: true },
-		"markup.link.url": { fg: markdown.link, underline: true },
-		"markup.link.label": { fg: markdown.linkText, underline: true },
-		"markup.strikethrough": { fg: theme.text.muted },
-	});
+	return SyntaxStyle.fromStyles(
+		{
+			default: { fg: theme.text.base },
+			"markup.heading": { fg: markdown.heading, bold: true },
+			"markup.heading.1": { fg: markdown.heading, bold: true, underline: true },
+			"markup.strong": { fg: markdown.strong, bold: true },
+			"markup.italic": { fg: markdown.emphasis, italic: true },
+			"markup.list": { fg: markdown.listItem },
+			"markup.quote": { fg: markdown.blockQuote, italic: true },
+			"markup.raw": { fg: markdown.code },
+			"markup.link": { fg: markdown.link, underline: true },
+			"markup.link.url": { fg: markdown.link, underline: true },
+			"markup.link.label": { fg: markdown.linkText, underline: true },
+			"markup.strikethrough": { fg: theme.text.muted },
+		},
+		context.renderer.nativeScene,
+	);
 }
 
 function openUrl(url: string) {
@@ -72,7 +77,11 @@ function TicketDetail(props: {
 	onPickLink: (urls: string[]) => void;
 }) {
 	const theme = () => props.context.theme;
-	const syntaxStyle = () => markdownStyle(props.context.theme);
+	const syntaxStyle = createMemo(() => {
+		const style = markdownStyle(props.context);
+		onCleanup(() => style.destroy());
+		return style;
+	});
 	const [issue] = createResource(() => props.linear.ticket(props.identifier));
 	const urls = () => extractUrls(issue()?.description ?? "");
 
