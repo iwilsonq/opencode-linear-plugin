@@ -12,7 +12,7 @@ async function renderedLinks(markdown: string) {
 	});
 	const view = new MarkdownRenderable(renderer, {
 		content: "",
-		syntaxStyle: SyntaxStyle.fromStyles({ default: {} }),
+		syntaxStyle: SyntaxStyle.fromStyles({ default: {} }, renderer.nativeScene),
 		conceal: true,
 		width: 120,
 	});
